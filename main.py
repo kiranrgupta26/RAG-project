@@ -3,26 +3,43 @@ from sentence_transformers import SentenceTransformer
 import ollama
 from pypdf import PdfReader
 import chromadb
+from datetime import datetime
 
-
+def store_metadata(chunks, file_name, pages):
+    metadata = []
+    # Extracting date dynamically (you could use a fixed date if needed)
+    extraction_date = datetime.now().strftime("%Y-%m-%d")
+    
+    for page_number, page in enumerate(pages):
+        for i, chunk in enumerate(chunks):
+            metadata.append({
+                "file_name": file_name,
+                "page_number": page_number + 1,
+                "date": extraction_date,
+                "chunk_index": i
+            })
+    
+    return metadata
+    
 def read_pdf(path):
     reader = PdfReader(path)
     text = ""
-    for page in reader.pages:
+    for page_number, page in enumerate(reader.pages):
         page_text = page.extract_text()
         if page_text:
             text += page_text + "\n"
-    return text
+    return text, reader.pages
     
-    
-text = read_pdf("bank.pdf")
+file_name = "bank.pdf"    
+text, pages = read_pdf("bank.pdf")
+
 documents = [text]
 splitter = RecursiveCharacterTextSplitter(chunk_size = 200,
                                          chunk_overlap = 50)
 
 chunks = splitter.split_text(documents[0])
 
-
+metadata = store_metadata(chunks, file_name, pages)
 #Create Embeddings
 
 embed_model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -38,7 +55,8 @@ collection = client.get_or_create_collection(name="pdf_chunks")
 collection.add(
     documents=chunks,
     embeddings=embeddings.tolist(),  # Chroma expects a list of lists
-    ids=[str(i) for i in range(len(chunks))]
+    ids=[str(i) for i in range(len(chunks))],
+    metadatas=metadata
 )
 
 #Retireve Function
@@ -48,14 +66,17 @@ def retrieve(query, k=3):
         query_embeddings=q_embedding,
         n_results=k
     )
-    docs = results.get("documents",[[]])[0]
-    return docs
+    docs = results.get("documents", [[]])[0]
+    meta = results.get("metadatas", [[]])[0]
+    
+    return docs,meta
     
 #Connect to Local LLM and ask question
 
 def ask_llm(question):
-    context_chunks = retrieve(question)
-   
+    context_chunks,metadata = retrieve(question)
+    
+    print(f"Metadata is: {metadata}")
     if not context_chunks:
         return "Not found in the provided context."
     
