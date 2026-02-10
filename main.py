@@ -5,21 +5,10 @@ from pypdf import PdfReader
 import chromadb
 from datetime import datetime
 
-def store_metadata(chunks, file_name, pages):
-    metadata = []
-    # Extracting date dynamically (you could use a fixed date if needed)
-    extraction_date = datetime.now().strftime("%Y-%m-%d")
-    
-    for page_number, page in enumerate(pages):
-        for i, chunk in enumerate(chunks):
-            metadata.append({
-                "file_name": file_name,
-                "page_number": page_number + 1,
-                "date": extraction_date,
-                "chunk_index": i
-            })
-    
-    return metadata
+embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+splitter = RecursiveCharacterTextSplitter(chunk_size = 200,chunk_overlap = 50)
+client = chromadb.PersistentClient(path="./chroma_db")
+collection = client.get_or_create_collection(name="pdf_chunks")
     
 def read_pdf(path):
     reader = PdfReader(path)
@@ -30,36 +19,39 @@ def read_pdf(path):
             text += page_text + "\n"
     return text, reader.pages
     
-file_name = "bank.pdf"    
-text, pages = read_pdf("bank.pdf")
+     
+def get_metadata(chunks, file_name):
 
-documents = [text]
-splitter = RecursiveCharacterTextSplitter(chunk_size = 200,
-                                         chunk_overlap = 50)
+    metadata = []
+    extraction_date = datetime.now().strftime("%Y-%m-%d")
 
-chunks = splitter.split_text(documents[0])
+    for i in range(len(chunks)):
+        metadata.append({
+            "file_name": file_name,
+            "chunk_index": i,
+            "date": extraction_date
+        })
 
-metadata = store_metadata(chunks, file_name, pages)
-#Create Embeddings
-
-embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-embeddings = embed_model.encode(chunks)
-
-# Chroma Database
-client = chromadb.PersistentClient(path="./chroma_db")
-
-#Create Collection
-collection = client.get_or_create_collection(name="pdf_chunks")
-
-# Add embeddings and documents to Chroma
-collection.add(
-    documents=chunks,
-    embeddings=embeddings.tolist(),  # Chroma expects a list of lists
-    ids=[str(i) for i in range(len(chunks))],
-    metadatas=metadata
-)
-
-#Retireve Function
+    return metadata
+    
+def get_chunks(documents):
+    chunks = splitter.split_text(documents[0])
+    return chunks
+    
+ 
+def get_embedding_vectors(chunks):
+    embeddings = embed_model.encode(chunks)
+    
+    return embeddings
+  
+def add_to_vector_db(chunks,embeddings,metadata):
+    collection.add(
+        documents=chunks,
+        embeddings=embeddings.tolist(),
+        ids=[str(i) for i in range(len(chunks))],
+        metadatas=metadata
+    )
+    
 def retrieve(query, k=3):
     q_embedding = embed_model.encode([query]).tolist()
     results = collection.query(
@@ -70,8 +62,7 @@ def retrieve(query, k=3):
     meta = results.get("metadatas", [[]])[0]
     
     return docs,meta
-    
-#Connect to Local LLM and ask question
+
 
 def ask_llm(question):
     context_chunks,metadata = retrieve(question)
@@ -107,7 +98,20 @@ Answer (verbatim from the Context):
     )
     
     return response["message"]["content"]
+   
 
+    
+file_name = "bank.pdf"    
+text, pages = read_pdf("bank.pdf")
+documents = [text]
+
+chunks = get_chunks(documents)
+
+metadata = get_metadata(chunks, file_name)
+
+embeddings = get_embedding_vectors(chunks)
+
+add_to_vector_db(chunks,embeddings,metadata)
 
 while True:
     i_question = input("Ask Question: ")
